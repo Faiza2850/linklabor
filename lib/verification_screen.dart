@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
@@ -5,7 +6,7 @@ import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as path;
 import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:path_provider/path_provider.dart';
-
+import 'screens/worker/dashboard.dart';
 
 class VerificationScreen extends StatefulWidget {
   final Map<String, String> workerData;
@@ -17,106 +18,101 @@ class VerificationScreen extends StatefulWidget {
 }
 
 class _VerificationScreenState extends State<VerificationScreen> {
-  // Store file objects
+  // ================= FILES =================
   File? _cnicFront;
   File? _cnicBack;
   File? _profilePic;
   File? _workCert;
-  File? _licenseFront;
+  File? _license;
   File? _licenseBack;
 
   static const String _baseUrl = "http://10.0.2.2:5000";
-
+  static const double maxFileSizeKB = 500;
 
   final ImagePicker _picker = ImagePicker();
   bool _isUploading = false;
 
-
-  //compress
-  Future<File?> _compressImage(File file) async {
+  // ================= IMAGE COMPRESSION =================
+  Future<File> _compressAndResize(File file) async {
     try {
       final tempDir = await getTemporaryDirectory();
-      final targetPath =
+
+      String getTargetPath() =>
           "${tempDir.path}/img_${DateTime.now().millisecondsSinceEpoch}.jpg";
 
-      // 🔹 First attempt (balanced)
-      var result = await FlutterImageCompress.compressAndGetFile(
+      int quality = 80; // Start with a decent quality
+      var targetPath = getTargetPath();
+
+      XFile? resultXFile = await FlutterImageCompress.compressAndGetFile(
         file.path,
         targetPath,
-        quality: 70,
+        quality: quality,
         format: CompressFormat.jpeg,
       );
 
-      // 🔹 Fallback attempt (more aggressive)
-      if (result == null) {
-        result = await FlutterImageCompress.compressAndGetFile(
-          file.path,
+      if (resultXFile == null) return file; // If compression fails, return original.
+
+      File resultFile = File(resultXFile.path);
+
+      // Loop to reduce size until under the limit
+      while (resultFile.lengthSync() / 1024 > maxFileSizeKB && quality > 10) {
+        quality -= 15; // Reduce quality for the next attempt
+        targetPath = getTargetPath(); // Use a new path
+
+        resultXFile = await FlutterImageCompress.compressAndGetFile(
+          file.path, // Compress from the original file
           targetPath,
-          quality: 50,
+          quality: quality,
           format: CompressFormat.jpeg,
         );
+
+        if (resultXFile == null) break; // If this attempt fails, stick with the last good one
+        resultFile = File(resultXFile.path);
       }
 
-      // 🔹 Final fallback: use original file (never block user)
-      if (result == null) {
-        debugPrint("Compression failed, using original image");
-        return file;
-      }
-
-      final sizeKB = await result.length() / 1024;
-      debugPrint("Final image size: ${sizeKB.toStringAsFixed(1)} KB");
-
-      return File(result.path);
-    } catch (e) {
-      debugPrint("Compression exception: $e");
-      return file; // never return null
-    } 
+      return resultFile;
+    } catch (_) {
+      return file; // On any error, fall back to the original file
+    }
   }
 
-  // --- Helper to Pick and Compress Image ---
+  // ================= PICK IMAGE =================
   Future<void> _pickImage(ImageSource source, Function(File) onSelect) async {
     try {
-      final XFile? picked = await _picker.pickImage(
-        source: source,
-        imageQuality: 85, // initial mild compression
-      );
-
+      final picked = await _picker.pickImage(source: source);
       if (picked == null) return;
 
-      final originalFile = File(picked.path);
-      final compressedFile = await _compressImage(originalFile);
+      final compressed = await _compressAndResize(File(picked.path));
+      final sizeKB = compressed.lengthSync() / 1024;
 
-      if (compressedFile == null) return;
+      setState(() {
+        onSelect(compressed); // Update file
+      });
 
-      final sizeKB = await compressedFile.length() / 1024;
-
-      if (sizeKB > 500) {
+      if (sizeKB > maxFileSizeKB) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              "Image too large (${sizeKB.toStringAsFixed(0)}KB). Please retake closer photo.",
-            ),
+                "Image still too large (${sizeKB.toStringAsFixed(0)} KB)."),
+            backgroundColor: Colors.orange,
           ),
         );
-        return;
       }
-
-      setState(() => onSelect(compressedFile));
     } catch (e) {
-      debugPrint("Pick error: $e");
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text("Failed to pick image: $e")));
     }
   }
 
-
-  // --- Submit to Server ---
+  // ================= SUBMIT REGISTRATION =================
   Future<void> _submitFullRegistration() async {
-    // 1. Client-side validation for required files
     if (_cnicFront == null || _cnicBack == null || _profilePic == null) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Profile picture, CNIC front, and CNIC back are required.'),
+          content: Text("Profile picture, CNIC front & back are required."),
           backgroundColor: Colors.red,
         ),
       );
@@ -125,27 +121,37 @@ class _VerificationScreenState extends State<VerificationScreen> {
 
     setState(() => _isUploading = true);
 
-    try {
-      final uri = Uri.parse("$_baseUrl/register-api/worker");
-      final request = http.MultipartRequest("POST", uri);
+    int? newWorkerId;
 
-      // ✅ Add text fields (already validated earlier)
+    try {
+      final request =
+          http.MultipartRequest("POST", Uri.parse("$_baseUrl/api/worker"));
+
+      // TEXT FIELDS
       request.fields.addAll(widget.workerData);
 
-      // ✅ Add files (exact backend field names)
+      // FILES
       await _addFile(request, "cnicFront", _cnicFront);
       await _addFile(request, "cnicBack", _cnicBack);
       await _addFile(request, "profilePic", _profilePic);
       await _addFile(request, "workCert", _workCert);
-      await _addFile(request, "license", _licenseFront);
+      await _addFile(request, "license", _license);
       await _addFile(request, "licenseBack", _licenseBack);
 
-      final streamedResponse = await request.send();
-      final response = await http.Response.fromStream(streamedResponse);
+      final response = await http.Response.fromStream(await request.send());
 
       if (!mounted) return;
 
       if (response.statusCode == 200 || response.statusCode == 201) {
+        final responseBody = jsonDecode(response.body);
+        
+        // Safer parsing of workerId
+        try {
+          newWorkerId = int.parse(responseBody['workerId'].toString());
+        } catch (e) {
+          throw Exception("Invalid workerId format from server");
+        }
+
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text("Worker registered successfully"),
@@ -159,111 +165,91 @@ class _VerificationScreenState extends State<VerificationScreen> {
             backgroundColor: Colors.red,
           ),
         );
-      } 
+      }
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Network error: $e")),
+        SnackBar(content: Text("An error occurred: $e")),
       );
     } finally {
       if (mounted) setState(() => _isUploading = false);
     }
+
+    if (newWorkerId != null) {
+      Navigator.pushAndRemoveUntil(
+        context,
+        MaterialPageRoute(
+          builder: (context) => WorkerDashboard(workerId: newWorkerId!),
+        ),
+        (route) => false,
+      );
+    }
   }
 
-
   Future<void> _addFile(
-      http.MultipartRequest request,
-      String fieldName,
-      File? file,
-      ) async {
+      http.MultipartRequest request, String field, File? file) async {
     if (file == null) return;
 
     request.files.add(
       await http.MultipartFile.fromPath(
-        fieldName,
+        field,
         file.path,
         filename: path.basename(file.path),
       ),
     );
   }
 
-
+  // ================= UI =================
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF5F5F5), // Light Gray Background
       appBar: AppBar(
-        title: const Text("Verify Documents", style: TextStyle(fontWeight: FontWeight.bold)),
-        backgroundColor: const Color(0xFF1E8449), // Main Green
+        title: const Text("Verify Documents"),
+        backgroundColor: const Color(0xFF1E8449),
         foregroundColor: Colors.white,
-        centerTitle: true,
-        elevation: 0,
       ),
-      body: Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(20),
-          child: Card(
-            elevation: 5,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-            color: Colors.white,
-            child: Padding(
-              padding: const EdgeInsets.all(25.0),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-
-                  // --- Header ---
-                  const Text(
-                    "Upload Documents",
-                    style: TextStyle(
-                      fontSize: 22,
-                      fontWeight: FontWeight.bold,
-                      color: Color(0xFF1E8449), // Green Header
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(20),
+        child: Card(
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+          child: Padding(
+            padding: const EdgeInsets.all(25),
+            child: Column(
+              children: [
+                _buildUploadRow(
+                    "CNIC Front", _cnicFront, (f) => setState(() => _cnicFront = f)),
+                _buildUploadRow(
+                    "CNIC Back", _cnicBack, (f) => setState(() => _cnicBack = f)),
+                _buildUploadRow("Profile Picture", _profilePic,
+                    (f) => setState(() => _profilePic = f)),
+                _buildUploadRow("Work Certificate (Optional)", _workCert,
+                    (f) => setState(() => _workCert = f)),
+                _buildUploadRow(
+                    "License Front", _license, (f) => setState(() => _license = f)),
+                _buildUploadRow("License Back", _licenseBack,
+                    (f) => setState(() => _licenseBack = f)),
+                const SizedBox(height: 25),
+                SizedBox(
+                  width: double.infinity,
+                  height: 50,
+                  child: ElevatedButton(
+                    onPressed: _isUploading ? null : _submitFullRegistration,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF1E8449),
                     ),
+                    child: _isUploading
+                        ? const CircularProgressIndicator(color: Colors.white)
+                        : const Text(
+                            "Submit Application",
+                            style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white),
+                          ),
                   ),
-                  const SizedBox(height: 5),
-                  const Text(
-                    "( Secure Verification )",
-                    style: TextStyle(fontSize: 14, color: Color(0xFF17A589)), // Teal Subtitle
-                  ),
-                  const SizedBox(height: 30),
-
-                  // --- Upload Sections ---
-                  _buildUploadRow("Upload CNIC Front", _cnicFront, (f) => _cnicFront = f),
-                  _buildUploadRow("Upload CNIC Back", _cnicBack, (f) => _cnicBack = f),
-                  _buildUploadRow("Upload Profile Picture", _profilePic, (f) => _profilePic = f),
-
-                  const Divider(height: 40, color: Colors.grey), // Separator
-
-                  _buildUploadRow("Work Certificate (Optional)", _workCert, (f) => _workCert = f),
-                  _buildUploadRow("License Front (Drivers)", _licenseFront, (f) => _licenseFront = f),
-                  _buildUploadRow("License Back (Drivers)", _licenseBack, (f) => _licenseBack = f),
-
-                  const SizedBox(height: 20),
-
-                  // --- Submit Button ---
-                  SizedBox(
-                    width: double.infinity,
-                    height: 50,
-                    child: ElevatedButton(
-                      onPressed: _isUploading ? null : _submitFullRegistration,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF1E8449), // Main Green Button
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        elevation: 3,
-                      ),
-                      child: _isUploading
-                          ? const CircularProgressIndicator(color: Colors.white)
-                          : const Text(
-                        "Submit Application",
-                        style: TextStyle(fontSize: 18, color: Colors.white, fontWeight: FontWeight.bold),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
         ),
@@ -271,81 +257,59 @@ class _VerificationScreenState extends State<VerificationScreen> {
     );
   }
 
-  // --- Styled Row for Upload/Scan ---
   Widget _buildUploadRow(String title, File? file, Function(File) onSelect) {
-    // Calculate file size
-    String sizeText = "";
-    if (file != null) {
-      double kb = file.lengthSync() / 1024;
-      sizeText = "(${kb.toStringAsFixed(2)} KB)";
+    String? fileName = file != null ? path.basename(file.path) : null;
+    double? fileSizeKB = file != null ? file.lengthSync() / 1024 : null;
+    double progress =
+        (fileSizeKB != null) ? (fileSizeKB / maxFileSizeKB).clamp(0, 1) : 0;
+
+    Color progressColor;
+    if (progress < 0.7) {
+      progressColor = Colors.green;
+    } else if (progress < 1.0) {
+      progressColor = Colors.orange;
+    } else {
+      progressColor = Colors.red;
     }
 
     return Padding(
-      padding: const EdgeInsets.only(bottom: 25.0),
+      padding: const EdgeInsets.only(bottom: 20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(title, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Colors.black87)),
-          const SizedBox(height: 10),
-
+          Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
+          const SizedBox(height: 8),
           Row(
             children: [
-              // 1. Upload/Update Button (Light Green)
               Expanded(
                 child: ElevatedButton(
                   onPressed: () => _pickImage(ImageSource.gallery, onSelect),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFFE8F5E9), // Very Light Green
-                    foregroundColor: const Color(0xFF1E8449), // Dark Green Text
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                    elevation: 0,
-                    side: const BorderSide(color: Color(0xFFA5D6A7)), // Light Green Border
-                  ),
-                  child: Text(
-                    file != null ? "Update" : "Upload",
-                    style: const TextStyle(fontWeight: FontWeight.bold),
-                  ),
+                  child: Text(file == null ? "Upload" : "Update"),
                 ),
               ),
-              const SizedBox(width: 15),
-
-              // 2. Scan Button (Solid Green)
+              const SizedBox(width: 10),
               Expanded(
                 child: ElevatedButton(
                   onPressed: () => _pickImage(ImageSource.camera, onSelect),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF1E8449), // Solid Green
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                    elevation: 2,
-                  ),
-                  child: const Text("Scan", style: TextStyle(fontWeight: FontWeight.bold)),
+                  child: const Text("Scan"),
                 ),
               ),
             ],
           ),
-
-          // 3. File Info
-          if (file != null)
-            Padding(
-              padding: const EdgeInsets.only(top: 8.0, left: 4),
-              child: Text(
-                "Selected: ${path.basename(file.path)} $sizeText",
-                style: const TextStyle(fontSize: 12, color: Color(0xFF1E8449), fontWeight: FontWeight.w500),
-              ),
+          if (fileName != null && fileSizeKB != null) ...[
+            const SizedBox(height: 5),
+            Text(
+              "Selected: $fileName (${fileSizeKB.toStringAsFixed(1)} KB)",
+              style: const TextStyle(color: Colors.grey, fontSize: 12),
             ),
-
-          // 4. Helper Text
-          if (file == null)
-            const Padding(
-              padding: EdgeInsets.only(top: 4.0, left: 4),
-              child: Text(
-                "*Image must be less than 500KB",
-                style: TextStyle(fontSize: 10, color: Colors.grey),
-              ),
+            const SizedBox(height: 3),
+            LinearProgressIndicator(
+              value: progress,
+              color: progressColor,
+              backgroundColor: Colors.grey[300],
+              minHeight: 5,
             ),
+          ],
         ],
       ),
     );
