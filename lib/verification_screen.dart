@@ -181,7 +181,7 @@ class _VerificationScreenState extends State<VerificationScreen> {
         MaterialPageRoute(
           builder: (context) => WorkerDashboard(workerId: newWorkerId!),
         ),
-        (route) => false,
+        (route) => route.isFirst,
       );
     }
   }

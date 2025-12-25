@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'worker_registration_screen.dart';
 
+import 'customer_registration_screen.dart';
+
 class RoleSelectionScreen extends StatelessWidget {
   const RoleSelectionScreen({super.key});
 
@@ -28,7 +30,7 @@ class RoleSelectionScreen extends StatelessWidget {
             children: [
               // 2. TITLE
               const Text(
-                "Welcome to Amal-e-Rozi",
+                "Welcome to LinkLabor",
                 style: TextStyle(
                   fontSize: 24,
                   fontWeight: FontWeight.bold,
@@ -63,8 +65,13 @@ class RoleSelectionScreen extends StatelessWidget {
                 icon: "🙋‍♀️",
                 textColor: Colors.green[700]!,
                 onTap: () {
-                  print("Selected: Customer");
-                  // Navigate to Customer Login/Signup later
+                  // --- NAVIGATION ADDED HERE ---
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => const CustomerRegistrationScreen(),
+                    ),
+                  );
                 },
               ),
             ],

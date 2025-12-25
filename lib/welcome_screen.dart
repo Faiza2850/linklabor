@@ -55,7 +55,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
 
               // TITLE
               const Text(
-                "Welcome to Rozgaar",
+                "Welcome to LinkLabour",
                 style: TextStyle(
                   fontSize: 24,
                   fontWeight: FontWeight.bold,
