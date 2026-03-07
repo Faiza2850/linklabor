@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'welcome_screen.dart'; // Import the file we just created
+import 'screens/welcome_screen.dart'; // Import the file we just created
 
 void main() {
   runApp(const MyApp());

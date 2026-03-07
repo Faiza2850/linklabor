@@ -4,6 +4,15 @@ const mysql = require("mysql2");
 const cors = require("cors");
 const multer = require("multer");
 const bodyParser = require("body-parser");
+const axios = require('axios');   // For calling the Python API
+const FormData = require('form-data');
+const fs = require('fs');
+const path = require('path');
+
+
+// Configure Multer (Temporary storage for uploaded images)
+// This saves the image to a 'uploads' folder so we can read it
+
 
 const app = express();
 app.use(cors());
@@ -341,6 +350,80 @@ app.get('/api/jobs/customer/:id', async (req, res) => {
     }
 });
 
+// 5. OCR LOGIC
+
+// Configure Multer (Temporary storage for uploaded images)
+// This saves the image to a 'uploads' folder so we can read it
+// 1. Create a unique uploader just for the CNIC feature
+const cnicUpload = multer({ dest: 'uploads/' });
+
+// --- THE NEW ROUTE ---
+// 2. Change 'upload.single' to 'cnicUpload.single'
+app.post('/api/verify-cnic', cnicUpload.single('cnic_image'), async (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ success: false, message: 'No image uploaded' });
+        }
+
+        console.log("Received image:", req.file.filename);
+
+        // Prepare the image to send to the Python Microservice
+        const formData = new FormData();
+        formData.append('file', fs.createReadStream(req.file.path));
+
+        // Send to Python
+        const pythonResponse = await axios.post('http://127.0.0.1:8000/extract-cnic', formData, {
+            headers: {
+                ...formData.getHeaders()
+            }
+        });
+
+        // Cleanup: Delete the temp file to save space
+        fs.unlinkSync(req.file.path);
+
+        // Send the Python result back to Flutter
+        console.log("AI Response:", pythonResponse.data);
+        res.json(pythonResponse.data);
+
+    } catch (error) {
+        console.error("Error connecting to AI service:", error.message);
+
+        if (req.file && req.file.path && fs.existsSync(req.file.path)) {
+            fs.unlinkSync(req.file.path);
+        }
+
+        res.status(500).json({
+            success: false,
+            message: 'Failed to process CNIC. Is the AI service running?'
+        });
+    }
+});
+
+// --- NEW ROUTE: AI VOICE ASSISTANT ---
+// Note: Isme hum file upload (multer) use nahi kar rahe kyunke hum sirf text bhej rahe hain.
+app.post('/api/process-voice', express.json(), async (req, res) => {
+    try {
+        const userText = req.body.text;
+
+        if (!userText) {
+            return res.status(400).json({ success: false, message: 'No text provided' });
+        }
+
+        console.log("Flutter sent voice text:", userText);
+
+        // Send this text to Python
+        const pythonResponse = await axios.post('http://127.0.0.1:8000/process-voice-text', {
+            text: userText
+        });
+
+        // Send Python's smart JSON back to Flutter
+        res.json(pythonResponse.data);
+
+    } catch (error) {
+        console.error("Error connecting to Voice AI:", error.message);
+        res.status(500).json({ success: false, message: 'Voice processing failed' });
+    }
+});
 // ================== START SERVER ==================
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}. All routes registered.`));
