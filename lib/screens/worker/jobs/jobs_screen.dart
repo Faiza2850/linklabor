@@ -8,31 +8,57 @@ class WorkerJobsScreen extends StatefulWidget {
 
   @override
   State<WorkerJobsScreen> createState() => _WorkerJobsScreenState();
+
 }
 
 class _WorkerJobsScreenState extends State<WorkerJobsScreen> {
   List<dynamic> _jobs = [];
   bool _isLoading = true;
+  // inside _WorkerJobsScreenState
+  Map<String, dynamic>? _workerProfile;
 
   @override
   void initState() {
     super.initState();
-    _fetchJobs();
+    _loadData();
+  }
+
+  Future<void> _loadData() async {
+    setState(() => _isLoading = true);
+    await _fetchWorkerProfile(); // Get worker's city/skill first
+    await _fetchJobs();          // Then fetch filtered jobs
+    setState(() => _isLoading = false);
+  }
+
+  Future<void> _fetchWorkerProfile() async {
+    try {
+      final response = await http.get(Uri.parse('http://10.0.2.2:5000/api/worker/${widget.workerId}'));
+      if (response.statusCode == 200) {
+        _workerProfile = jsonDecode(response.body);
+      }
+    } catch (e) {
+      print("Profile fetch error: $e");
+    }
   }
 
   Future<void> _fetchJobs() async {
     try {
-      final response =
-      await http.get(Uri.parse('http://10.0.2.2:5000/api/jobs/open'));
+      // Get city and skill from profile
+      String city = _workerProfile?['city'] ?? "";
+      String skill = _workerProfile?['skill'] ?? "";
 
-      if (response.statusCode == 200) {
+      // Construct URL with query parameters
+      String url = 'http://10.0.2.2:5000/api/jobs/open?city=$city&skill=$skill';
+
+      final response = await http.get(Uri.parse(url));
+
+      if (mounted && response.statusCode == 200) {
         setState(() {
           _jobs = jsonDecode(response.body);
-          _isLoading = false;
         });
       }
     } catch (e) {
-      setState(() => _isLoading = false);
+      print("Jobs fetch error: $e");
     }
   }
 
@@ -83,6 +109,8 @@ class _WorkerJobsScreenState extends State<WorkerJobsScreen> {
       ),
     );
   }
+
+
 
   @override
   Widget build(BuildContext context) {

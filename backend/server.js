@@ -424,6 +424,54 @@ app.post('/api/process-voice', express.json(), async (req, res) => {
         res.status(500).json({ success: false, message: 'Voice processing failed' });
     }
 });
+
+// 2. GET: Worker Sees Open Jobs (Filtered by City and Skill)
+app.get('/api/jobs/open', async (req, res) => {
+    try {
+        // Get filters from the URL query strings
+        const { city, skill } = req.query;
+
+        let sql = `
+            SELECT
+                j.id, j.title, j.description, j.budget, j.location, j.created_at,
+                c.fullName AS customerName,
+                c.phone AS customerPhone,
+                c.profilePic AS customerPic
+            FROM jobs AS j
+            INNER JOIN customers AS c ON j.customer_id = c.id
+            WHERE j.status = 'open'
+        `;
+
+        const params = [];
+
+        // Logical Filter: Location
+        if (city && city !== "null" && city !== "") {
+            sql += ` AND j.location = ?`;
+            params.push(city);
+        }
+
+        // Logical Filter: Skill Match
+        // We use LIKE because a job title or description might contain the skill name
+        if (skill && skill !== "null" && skill !== "") {
+            sql += ` AND (j.title LIKE ? OR j.description LIKE ?)`;
+            params.push(`%${skill}%`, `%${skill}%`);
+        }
+
+        sql += ` ORDER BY j.created_at DESC`;
+
+        const [rows] = await db.query(sql, params);
+
+        const jobsWithPics = rows.map(job => ({
+            ...job,
+            customerPic: job.customerPic ? Buffer.from(job.customerPic).toString('base64') : null
+        }));
+
+        res.json(jobsWithPics);
+    } catch (err) {
+        console.error("❌ Fetch open jobs error:", err);
+        res.status(500).json({ error: "Failed to fetch jobs" });
+    }
+});
 // ================== START SERVER ==================
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}. All routes registered.`));

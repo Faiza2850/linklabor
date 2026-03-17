@@ -1,11 +1,11 @@
 import 'dart:io';
 import 'dart:convert';
-import 'dart:async'; // --- AI INTEGRATION: Needed for Conversational Flow ---
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:http/http.dart' as http;
-import 'package:flutter_tts/flutter_tts.dart'; // --- AI INTEGRATION: Text to Speech ---
-import 'package:speech_to_text/speech_to_text.dart'; // --- AI INTEGRATION: Speech to Text ---
+import 'package:flutter_tts/flutter_tts.dart';
+import 'package:speech_to_text/speech_to_text.dart';
 import 'verification_screen.dart';
 
 class WorkerRegistrationScreen extends StatefulWidget {
@@ -41,7 +41,6 @@ class _WorkerRegistrationScreenState extends State<WorkerRegistrationScreen> {
   bool _speechEnabled = false;
 
   bool _isVoiceAssistantActive = false;
-  int _currentVoiceStep = 0;
   String _voicePrompt = "";
   String _userSpokenText = "";
 
@@ -76,7 +75,12 @@ class _WorkerRegistrationScreenState extends State<WorkerRegistrationScreen> {
     if (mounted) setState(() {});
   }
 
-  // ================= THE CONVERSATION LOGIC =================
+  // --- Speak Text Function ---
+  Future<void> _speakText(String text) async {
+    await _flutterTts.stop();
+    await _flutterTts.speak(text);
+  }
+
   // ================= THE BACKEND AI CONVERSATION LOGIC =================
   Future<void> _startVoiceFlow() async {
     if (!_speechEnabled) {
@@ -96,22 +100,19 @@ class _WorkerRegistrationScreenState extends State<WorkerRegistrationScreen> {
 
     Completer<void> completer = Completer<void>();
 
-    // Start Listening for the long answer
     await _speechToText.listen(
       onResult: (result) async {
         setState(() {
           _userSpokenText = result.recognizedWords;
         });
 
-        // When the user stops speaking
         if (result.finalResult) {
           if (!completer.isCompleted) completer.complete();
-
-          // 1. SEND TEXT TO BACKEND!
+          // SEND TEXT TO BACKEND!
           await _sendTextToPythonBackend(result.recognizedWords);
         }
       },
-      listenFor: const Duration(seconds: 10), // Give them 10 seconds to speak
+      listenFor: const Duration(seconds: 10),
       pauseFor: const Duration(seconds: 3),
       localeId: "ur-PK",
     );
@@ -119,7 +120,7 @@ class _WorkerRegistrationScreenState extends State<WorkerRegistrationScreen> {
     await completer.future;
   }
 
-  // --- NEW FUNCTION: Send the text to Node.js / Python ---
+  // --- Send the text to Node.js / Python ---
   Future<void> _sendTextToPythonBackend(String text) async {
     try {
       setState(() {
@@ -156,42 +157,6 @@ class _WorkerRegistrationScreenState extends State<WorkerRegistrationScreen> {
       await Future.delayed(const Duration(seconds: 2));
       if (mounted) setState(() => _isVoiceAssistantActive = false);
     }
-  }
-
-  Future<void> _askAndListen({required String prompt, required int step, required Function(String) onProcessed}) async {
-    setState(() {
-      _currentVoiceStep = step;
-      _voicePrompt = prompt;
-      _userSpokenText = "Listening...";
-    });
-
-    await _flutterTts.speak(prompt);
-    Completer<void> completer = Completer<void>();
-
-    await _speechToText.listen(
-      onResult: (result) {
-        setState(() {
-          _userSpokenText = result.recognizedWords;
-        });
-
-        if (result.finalResult) {
-          onProcessed(result.recognizedWords);
-          if (!completer.isCompleted) completer.complete();
-        }
-      },
-      listenFor: const Duration(seconds: 5),
-      pauseFor: const Duration(seconds: 3),
-      localeId: "ur-PK",
-    );
-
-    Future.delayed(const Duration(seconds: 8), () {
-      if (!completer.isCompleted) {
-        _speechToText.stop();
-        completer.complete();
-      }
-    });
-
-    await completer.future;
   }
 
   void _stopVoiceAssistant() {
@@ -341,7 +306,6 @@ class _WorkerRegistrationScreenState extends State<WorkerRegistrationScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.grey[100],
-      // --- AI INTEGRATION: Floating Button for Voice ---
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _isVoiceAssistantActive ? _stopVoiceAssistant : _startVoiceFlow,
         backgroundColor: _isVoiceAssistantActive ? Colors.red : const Color(0xFF1E8449),
@@ -353,7 +317,6 @@ class _WorkerRegistrationScreenState extends State<WorkerRegistrationScreen> {
           padding: const EdgeInsets.all(20),
           child: Column(
             children: [
-              // --- AI INTEGRATION: Voice Assistant UI Card ---
               if (_isVoiceAssistantActive)
                 Card(
                   color: const Color(0xFFE8F8F5),
@@ -383,17 +346,26 @@ class _WorkerRegistrationScreenState extends State<WorkerRegistrationScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        const Center(
-                          child: Text(
-                            "Create your Profile",
-                            style: TextStyle(
-                              fontSize: 22,
-                              fontWeight: FontWeight.bold,
-                              color: Color(0xFF1E8449),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.center,  children: [
+                          // Wrap the text in Flexible to prevent horizontal overflow
+                          Flexible(
+                            child: Text(
+                              "Create your Profile",
+                              textAlign: TextAlign.center, // Ensure text stays centered if it wraps
+                              style: const TextStyle(
+                                fontSize: 22,
+                                fontWeight: FontWeight.bold,
+                                color: Color(0xFF1E8449),
+                              ),
                             ),
                           ),
+                          IconButton(
+                            icon: const Icon(Icons.volume_up, color: Color(0xFF1E8449)),
+                            onPressed: () => _speakText("Apni profile banayein, as a worker"),
+                          )
+                        ],
                         ),
-                        const SizedBox(height: 5),
                         const Center(
                           child: Text(
                             "( As a Worker )",
@@ -405,7 +377,6 @@ class _WorkerRegistrationScreenState extends State<WorkerRegistrationScreen> {
                         ),
                         const SizedBox(height: 25),
 
-                        // --- AI INTEGRATION: THE CAMERA BUTTON UI ---
                         GestureDetector(
                           onTap: _showImageSourceOptions,
                           child: Container(
@@ -423,22 +394,26 @@ class _WorkerRegistrationScreenState extends State<WorkerRegistrationScreen> {
                             )
                                 : Column(
                               mainAxisAlignment: MainAxisAlignment.center,
-                              children: const [
-                                Icon(Icons.document_scanner, size: 40, color: Color(0xFF1E8449)),
-                                SizedBox(height: 8),
-                                Text(
+                              children: [
+                                const Icon(Icons.document_scanner, size: 40, color: Color(0xFF1E8449)),
+                                const SizedBox(height: 8),
+                                const Text(
                                   "Tap to Auto-Fill via CNIC",
                                   style: TextStyle(
                                     color: Color(0xFF1E8449),
                                     fontWeight: FontWeight.bold,
                                   ),
                                 ),
+                                TextButton.icon(
+                                    onPressed: () => _speakText("Apna shanakhti card scan karne ke liye yahan dabayein"),
+                                    icon: const Icon(Icons.volume_up, size: 16),
+                                    label: const Text("Sunye")
+                                )
                               ],
                             ),
                           ),
                         ),
 
-                        // --- AI INTEGRATION: LOADING INDICATOR ---
                         if (_isLoading)
                           const Padding(
                             padding: EdgeInsets.only(top: 15.0),
@@ -451,15 +426,15 @@ class _WorkerRegistrationScreenState extends State<WorkerRegistrationScreen> {
 
                         const SizedBox(height: 10),
 
-                        _buildLabel("Enter your full name"),
+                        // --- THE FIXED LABELS WITH URDU TEXT ---
+                        _buildLabel("Enter your full name", "Apna mukammal naam darj karein"),
                         TextFormField(
                           controller: _nameController,
                           decoration: _inputDecoration("e.g. Muhammad Ali"),
-                          validator: (v) =>
-                          v == null || v.isEmpty ? "Enter name" : null,
+                          validator: (v) => v == null || v.isEmpty ? "Enter name" : null,
                         ),
 
-                        _buildLabel("Enter CNIC"),
+                        _buildLabel("Enter CNIC", "Apna shanakhti card number darj karein"),
                         TextFormField(
                           controller: _cnicController,
                           keyboardType: TextInputType.number,
@@ -471,64 +446,42 @@ class _WorkerRegistrationScreenState extends State<WorkerRegistrationScreen> {
                           },
                         ),
 
-                        _buildLabel("Enter Phone no."),
+                        _buildLabel("Enter Phone no.", "Apna phone number likhein"),
                         TextFormField(
                           controller: _phoneController,
                           keyboardType: TextInputType.phone,
                           decoration: _inputDecoration("e.g. 03332343654"),
-                          validator: (v) =>
-                          v == null || v.isEmpty ? "Enter phone number" : null,
+                          validator: (v) => v == null || v.isEmpty ? "Enter phone number" : null,
                         ),
 
-                        _buildLabel("Select City"),
+                        _buildLabel("Select City", "Apna shehar muntakhib karein"),
                         DropdownButtonFormField<String>(
                           decoration: _inputDecoration("City"),
                           value: _selectedCity,
-                          items: _cities
-                              .map(
-                                (c) => DropdownMenuItem(
-                              value: c,
-                              child: Text(c),
-                            ),
-                          )
-                              .toList(),
+                          items: _cities.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
                           onChanged: (v) => setState(() => _selectedCity = v),
                           validator: (v) => v == null ? "Select a city" : null,
                         ),
 
-                        _buildLabel("Select Skill"),
+                        _buildLabel("Select Skill", "Apna hunar ya kaam batayein"),
                         DropdownButtonFormField<String>(
                           decoration: _inputDecoration("Skill"),
                           value: _selectedSkill,
-                          items: _skills
-                              .map(
-                                (s) => DropdownMenuItem(
-                              value: s,
-                              child: Text(s),
-                            ),
-                          )
-                              .toList(),
+                          items: _skills.map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(),
                           onChanged: (v) => setState(() => _selectedSkill = v),
                           validator: (v) => v == null ? "Select a skill" : null,
                         ),
 
-                        _buildLabel("Daily Availability"),
+                        _buildLabel("Daily Availability", "Aap din mein kitni der kaam kar sakte hain?"),
                         DropdownButtonFormField<String>(
                           decoration: _inputDecoration("Duration"),
                           value: _selectedDuration,
-                          items: _durations
-                              .map(
-                                (d) => DropdownMenuItem(
-                              value: d,
-                              child: Text(d),
-                            ),
-                          )
-                              .toList(),
+                          items: _durations.map((d) => DropdownMenuItem(value: d, child: Text(d))).toList(),
                           onChanged: (v) => setState(() => _selectedDuration = v),
                           validator: (v) => v == null ? "Select duration" : null,
                         ),
 
-                        _buildLabel("About (Optional)"),
+                        _buildLabel("About (Optional)", "Apne tajarbe ke baare mein mazeed batayein"),
                         TextFormField(
                           controller: _aboutController,
                           decoration: _inputDecoration("Tell us about your experience..."),
@@ -555,7 +508,7 @@ class _WorkerRegistrationScreenState extends State<WorkerRegistrationScreen> {
                             ),
                           ),
                         ),
-                        const SizedBox(height: 40), // Spacing for the FAB
+                        const SizedBox(height: 40),
                       ],
                     ),
                   ),
@@ -569,16 +522,32 @@ class _WorkerRegistrationScreenState extends State<WorkerRegistrationScreen> {
   }
 
   // ================= HELPERS =================
-  Widget _buildLabel(String text) {
+  Widget _buildLabel(String text, String urduText) {
     return Padding(
       padding: const EdgeInsets.only(top: 15, bottom: 8),
-      child: Text(
-        text,
-        style: const TextStyle(
-          fontSize: 14,
-          fontWeight: FontWeight.w600,
-          color: Colors.black87,
-        ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(
+            text,
+            style: const TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+              color: Colors.black87,
+            ),
+          ),
+          GestureDetector(
+            onTap: () => _speakText(urduText),
+            child: Container(
+              padding: const EdgeInsets.all(4),
+              decoration: BoxDecoration(
+                color: const Color(0xFFE8F8F5),
+                borderRadius: BorderRadius.circular(5),
+              ),
+              child: const Icon(Icons.volume_up, size: 20, color: Color(0xFF17A589)),
+            ),
+          )
+        ],
       ),
     );
   }
